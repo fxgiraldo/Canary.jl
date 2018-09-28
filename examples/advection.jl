@@ -97,8 +97,8 @@ end
 
 # Dump the mesh
 include("vtk.jl")
-#writemesh(@sprintf("Advection%dD_rank_%04d_mesh", dim, mpirank), coord...;
-#          realelems=mesh.realelems)
+writemesh(@sprintf("Advection%dD_rank_%04d_mesh", dim, mpirank), coord...;
+          realelems=mesh.realelems)
 
 # Compute the metric terms
 metric = computemetric(coord..., D)
@@ -284,6 +284,8 @@ function facerhs!(rhs, Q::NamedTuple{S, NTuple{2, T}}, metric, ω, elems, vmapM,
   (ρ, Ux) = (Q.ρ, Q.Ux)
   nface = 2
   (nx, sJ) = (metric.nx, metric.sJ)
+  nx = reshape(nx, size(vmapM))
+  sJ = reshape(sJ, size(vmapM))
   for e ∈ elems
     for f ∈ 1:nface
       ρM = ρ[vmapM[1, f, e]]
@@ -298,7 +300,7 @@ function facerhs!(rhs, Q::NamedTuple{S, NTuple{2, T}}, metric, ω, elems, vmapM,
       λ = max.(abs.(nxM .* UxM), abs.(nxM .* UxP))
 
       F = (nxM .* (FxM + FxP) - λ .* (ρP - ρM)) / 2
-      rhsρ[vmapM[1, f, e]] -= ω .* sJ[1, f, e] .* F #Error is here!!
+      rhsρ[vmapM[1, f, e]] -= sJ[1, f, e] .* F #Error is here!!
     end
   end
 end
@@ -422,8 +424,8 @@ nrealelem = length(mesh.realelems)
 
 # Dump the initial condition
 include("vtk.jl")
-#writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, 0),
-#          coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
+writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, 0),
+          coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
 
 for step = 1:nsteps
   @show step
@@ -473,8 +475,8 @@ for step = 1:nsteps
 #                    RKB[s], dt)
   end
 
-#  writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, step),
-#            coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
+ writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, step),
+           coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
 end
 
 nothing

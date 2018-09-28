@@ -4,22 +4,19 @@ using WriteVTK
 This is the 1D WriteMesh routine
 =#
 function writemesh(base_name, x; fields=(), realelems=1:size(x)[end])
-  @assert size(x) == size(y)
-  (Nqr, Nqs, ~) = size(x)
-  Nsubcells = (Nqr-1) * (Nqs-1)
+  (Nqr, ~) = size(x)
+  Nsubcells = (Nqr-1)
 
   cells = Array{MeshCell{Array{Int,1}}, 1}(undef, Nsubcells * length(realelems))
-  ind = LinearIndices((1:Nqr))
   for e ∈ realelems
     offset = (e-1) * Nqr
     for i = 1:Nqr-1
         cells[i + (e-1)*Nsubcells] =
-        MeshCell(VTKCellTypes.VTK_PIXEL, offset .+ ind[i:i+1][:])
+          MeshCell(VTKCellTypes.VTK_LINE, offset .+ [i, i+1])
     end
   end
 
-  vtkfile = vtk_grid("$(base_name)", @view(x[:]), cells;
-                     compress=false)
+  vtkfile = vtk_grid("$(base_name)", @view(x[:]), cells; compress=false)
   for (name, v) ∈ fields
     vtk_point_data(vtkfile, v, name)
   end
