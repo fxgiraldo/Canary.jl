@@ -97,8 +97,8 @@ end
 
 # Dump the mesh
 include("vtk.jl")
-#writemesh(@sprintf("Advection%dD_rank_%04d_mesh", dim, mpirank), coord...;
-#          realelems=mesh.realelems)
+writemesh(@sprintf("Advection%dD_rank_%04d_mesh", dim, mpirank), coord...;
+          realelems=mesh.realelems)
 
 # Compute the metric terms
 metric = computemetric(coord..., D)
@@ -424,8 +424,8 @@ nrealelem = length(mesh.realelems)
 
 # Dump the initial condition
 include("vtk.jl")
-#writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, 0),
-#          coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
+writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, 0),
+          coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
 
 for step = 1:nsteps
   @show step
@@ -475,8 +475,8 @@ for step = 1:nsteps
 #                    RKB[s], dt)
   end
 
-#  writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, step),
-#            coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
+ writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, step),
+           coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
 end
 
 nothing
