@@ -11,8 +11,8 @@
 
 # parameters:
 N = 4
-# brickN = (12,)
-brickN = (1 * 12, 1 * 12)
+brickN = (10)
+#brickN = (1 * 12, 1 * 12)
 # brickN = (10, 10, 10)
 
 # First we load the MPI and Canary packages
@@ -25,6 +25,10 @@ DFloat = Float64
 
 # number of dimensions
 dim = length(brickN)
+
+println("N= ",N)
+println("dim= ",dim)
+println("brickN= ",brickN)
 
 # We now initialize MPI as well as get the communicator, rank, and size
 MPI.Initialized() || MPI.Init() # only initialize MPI if not initialized
@@ -68,7 +72,12 @@ D = spectralderivative(ξ)
 # Compute metric terms
 (nface, nelem) = size(mesh.elemtoelem)
 coord = creategrid(Val(dim), mesh.elemtocoord, ξ)
-if dim == 2
+if dim == 1
+  x = coord.x
+  for j = 1:length(x)
+    x[j] = x[j]
+  end
+elseif dim == 2
   (x, y) = (coord.x, coord.y)
   for j = 1:length(x)
     (x[j], y[j]) = (x[j] .+ sin.(π * x[j]) .* sin.(2 * π * y[j]) / 10,
@@ -88,8 +97,8 @@ end
 
 # Dump the mesh
 include("vtk.jl")
-writemesh(@sprintf("Advection%dD_rank_%04d_mesh", dim, mpirank), coord...;
-          realelems=mesh.realelems)
+#writemesh(@sprintf("Advection%dD_rank_%04d_mesh", dim, mpirank), coord...;
+#          realelems=mesh.realelems)
 
 # Compute the metric terms
 metric = computemetric(coord..., D)
@@ -111,11 +120,17 @@ Q   = NamedTuple{statesyms}(ntuple(j->zero(coord.x), length(statesyms)))
 rhs = NamedTuple{statesyms}(ntuple(j->zero(coord.x), length(statesyms)))
 Q.ρ .= exp.(-100 * r.^2)
 Q.Ux .= 1
-Q.Uy .= -1
+#Q.Uy .= -1
 
 # set dt and number of steps
 dt = [floatmax(DFloat)]
 if dim == 1
+  (ξx) = (metric.rx)
+  (Ux) = (Q.Ux)
+  for n = 1:length(Ux)
+    loc_dt = 2 ./ (abs.(Ux[n] * ξx[n]))
+    dt[1] = min(dt[1], loc_dt)
+  end
 
 elseif dim == 2
   (ξx, ξy, ηx, ηy) = (metric.rx, metric.ry, metric.sx, metric.sy)
@@ -174,6 +189,24 @@ RKC = (DFloat(0),
        DFloat(2006345519317) / DFloat(3224310063776),
        DFloat(2802321613138) / DFloat(2924317926251))
 
+#=
+This is the RHS Volume routine for 1-D
+F.X. Giraldo on 9/27/2018 - first Julia code!!
+=#
+# Volume RHS for 1-D
+function volumerhs!(rhs, Q::NamedTuple{S, NTuple{2, T}}, metric, D, ω,
+                    elems) where {S, T}
+  rhsρ = rhs.ρ
+  (ρ, Ux) = (Q.ρ, Q.Ux)
+  Nq = size(ρ, 1)
+  J = metric.J
+  ξx = metric.rx
+  # for each element
+  for e ∈ elems
+    # loop of ξ-grid lines
+      rhsρ[:,e] += D' * (ω .* J[:,e] .* ρ[:,e] .* (ξx[:,e] .* Ux[:,e]))
+  end #e ∈ elems
+end #function volumerhs-1d
 
 # Volume RHS for 2-D
 function volumerhs!(rhs, Q::NamedTuple{S, NTuple{3, T}}, metric, D, ω,
@@ -240,6 +273,32 @@ function volumerhs!(rhs, Q::NamedTuple{S, NTuple{4, T}}, metric, D, ω,
                  ζy[i, j, :, e] .* Uy[i, j, :, e] +
                  ζz[i, j, :, e] .* Uz[i, j, :, e]))
       end
+    end
+  end
+end
+
+# Face RHS for 1-D
+function facerhs!(rhs, Q::NamedTuple{S, NTuple{2, T}}, metric, ω, elems, vmapM,
+                  vmapP) where {S, T}
+  rhsρ = rhs.ρ
+  (ρ, Ux) = (Q.ρ, Q.Ux)
+  nface = 2
+  (nx, sJ) = (metric.nx, metric.sJ)
+  for e ∈ elems
+    for f ∈ 1:nface
+      ρM = ρ[vmapM[1, f, e]]
+      UxM = Ux[vmapM[1, f, e]]
+      FxM = ρM .* UxM
+
+      ρP = ρ[vmapP[1, f, e]]
+      UxP = Ux[vmapP[1, f, e]]
+      FxP = ρP .* UxP
+
+      nxM = nx[1, f, e]
+      λ = max.(abs.(nxM .* UxM), abs.(nxM .* UxP))
+
+      F = (nxM .* (FxM + FxP) - λ .* (ρP - ρM)) / 2
+      rhsρ[vmapM[1, f, e]] -= ω .* sJ[1, f, e] .* F #Error is here!!
     end
   end
 end
@@ -363,8 +422,8 @@ nrealelem = length(mesh.realelems)
 
 # Dump the initial condition
 include("vtk.jl")
-writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, 0),
-          coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
+#writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, 0),
+#          coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
 
 for step = 1:nsteps
   @show step
@@ -410,12 +469,12 @@ for step = 1:nsteps
     facerhs!(rhs, Q, metric, ω, mesh.realelems, vmapM, vmapP)
 
     # update solution and scale RHS
-    updatesolution!(rhs, Q, metric, ω, mesh.realelems, RKA[s%length(RKA)+1],
-                    RKB[s], dt)
+#    updatesolution!(rhs, Q, metric, ω, mesh.realelems, RKA[s%length(RKA)+1],
+#                    RKB[s], dt)
   end
 
-  writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, step),
-            coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
+#  writemesh(@sprintf("Advection%dD_rank_%04d_step_%05d", dim, mpirank, step),
+#            coord...; fields=(("ρ", Q.ρ),), realelems=mesh.realelems)
 end
 
 nothing
