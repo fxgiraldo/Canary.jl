@@ -284,6 +284,8 @@ function facerhs!(rhs, Q::NamedTuple{S, NTuple{2, T}}, metric, ω, elems, vmapM,
   (ρ, Ux) = (Q.ρ, Q.Ux)
   nface = 2
   (nx, sJ) = (metric.nx, metric.sJ)
+  nx = reshape(nx, size(vmapM))
+  sJ = reshape(sJ, size(vmapM))
   for e ∈ elems
     for f ∈ 1:nface
       ρM = ρ[vmapM[1, f, e]]
@@ -298,7 +300,7 @@ function facerhs!(rhs, Q::NamedTuple{S, NTuple{2, T}}, metric, ω, elems, vmapM,
       λ = max.(abs.(nxM .* UxM), abs.(nxM .* UxP))
 
       F = (nxM .* (FxM + FxP) - λ .* (ρP - ρM)) / 2
-      rhsρ[vmapM[1, f, e]] -= ω .* sJ[1, f, e] .* F #Error is here!!
+      rhsρ[vmapM[1, f, e]] -= sJ[1, f, e] .* F #Error is here!!
     end
   end
 end
