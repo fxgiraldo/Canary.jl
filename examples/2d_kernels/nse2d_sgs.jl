@@ -226,10 +226,75 @@ function computegeometry(::Val{dim}, mesh, D, ξ, ω, meshwarp, vmapM) where dim
 end
 # }}}
 
+
+# {{{ CPU Kernels
+# compute wave speed
+# SM Jan 7
+function compute_wave_speed(ρMinv, ρPinv, nxM, nyM, UM, VM, UP, VP, PM, PP, γ)
+
+    λM = ρMinv * abs(nxM * UM + nyM * VM) + sqrt(ρMinv * γ * PM)
+    λP = ρPinv * abs(nxM * UP + nyM * VP) + sqrt(ρPinv * γ * PP)
+    λ  =  max(λM, λP)
+    
+    return λ
+    
+end        
+                
+                
+
+# {{{ CPU Kernels
+# build volume fluxes (RENAME IT ?)
+# Make the flux construction invisible to the user
+# who does not know DG
+# SM Jan 7
+function build_volume_fluxes_ije(ξx, ξy, MJ, fluxQ_x, fluxQ_y)
+
+    volume_flux = MJ * (ξx * fluxQ_x + ξy * fluxQ_y)
+    
+    return volume_flux
+    
+end
+
+# {{{ CPU Kernels
+# build surface fluxes (RENAME IT ?)
+# Make the flux construction invisible to the user
+# who does not know DG
+# SM Jan 7
+function build_surface_fluxes_ije( nxM, nyM,
+                                   fluxQM_x, fluxQP_x,
+                                   fluxQM_y, fluxQP_y,
+                                   wave_speed, QM, QP)
+    
+    #Compute Numerical Flux
+    fluxQS = (nxM * (fluxQM_x + fluxQP_x) + nyM * (fluxQM_y + fluxQP_y) +
+              - wave_speed * (QP - QM)) / 2
+
+    return fluxQS
+
+end
+
+
+# {{{ CPU Kernels
+# Build int_{\Omega} \nabla\psi.F d\Omega
+# SM Jan 7
+function integrate_volume_rhs!(rhs,                 #in/out
+                               e, D, Nq, s_F, s_G)
+    
+        # loop of ξ-grid lines
+        for s = 1:_nstate, j = 1:Nq, i = 1:Nq, k = 1:Nq
+            rhs[i, j, s, e] += D[k, i] * s_F[k, j, s]
+        end
+        # loop of η-grid lines
+        for s = 1:_nstate, j = 1:Nq, i = 1:Nq, k = 1:Nq
+            rhs[i, j, s, e] += D[k, j] * s_G[i, k, s]
+        end
+end
+
+#
 # {{{ CPU Kernels
 # Volume RHS
 function volume_rhs!(::Val{2}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where N
-    DFloat = eltype(Q)
+    DFloat          = eltype(Q)
     γ::DFloat       = _γ
     p0::DFloat      = _p0
     R_gas::DFloat   = _R_gas
@@ -240,14 +305,14 @@ function volume_rhs!(::Val{2}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where N
     Nq = N + 1
     nelem = size(Q)[end]
 
-    Q = reshape(Q, Nq, Nq, _nstate, nelem)
-    rhs = reshape(rhs, Nq, Nq, _nstate, nelem)
+    Q    = reshape(Q, Nq, Nq, _nstate, nelem)
+    rhs  = reshape(rhs, Nq, Nq, _nstate, nelem)
     vgeo = reshape(vgeo, Nq, Nq, _nvgeo, nelem)
 
     #Allocate Arrays
     s_F = Array{DFloat}(undef, Nq, Nq, _nstate)
     s_G = Array{DFloat}(undef, Nq, Nq, _nstate)
-
+    
     @inbounds for e in elems
         for j = 1:Nq, i = 1:Nq
             MJ = vgeo[i, j, _MJ, e]
@@ -270,28 +335,51 @@ function volume_rhs!(::Val{2}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where N
             fluxV_y = ρinv * V * V + P
             fluxE_y = ρinv * V * (E+P)
 
+            #
+            # Build volume fluxes
+            #=
             s_F[i, j, _ρ] = MJ * (ξx * fluxρ_x + ξy * fluxρ_y)
             s_F[i, j, _U] = MJ * (ξx * fluxU_x + ξy * fluxU_y)
             s_F[i, j, _V] = MJ * (ξx * fluxV_x + ξy * fluxV_y)
-            s_F[i, j, _E] = MJ * (ξx * fluxE_x + ξy * fluxE_y)
-
+            s_F[i, j, _E] = MJ * (ξx * fluxE_x + ξy * fluxE_y)            
             s_G[i, j, _ρ] = MJ * (ηx * fluxρ_x + ηy * fluxρ_y)
             s_G[i, j, _U] = MJ * (ηx * fluxU_x + ηy * fluxU_y)
             s_G[i, j, _V] = MJ * (ηx * fluxV_x + ηy * fluxV_y)
             s_G[i, j, _E] = MJ * (ηx * fluxE_x + ηy * fluxE_y)
-
-            # buoyancy term
+            =#
+            s_F[i,j,_ρ] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxρ_x, fluxρ_y)
+            s_F[i,j,_U] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxU_x, fluxU_y)
+            s_F[i,j,_V] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxV_x, fluxV_y)
+            s_F[i,j,_E] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxE_x, fluxE_y)
+            
+            s_G[i,j,_ρ] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxρ_x, fluxρ_y)
+            s_G[i,j,_U] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxU_x, fluxU_y)
+            s_G[i,j,_V] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxV_x, fluxV_y)
+            s_G[i,j,_E] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxE_x, fluxE_y)
+            
+            
+            #
+            # buoyancy term: (refer to src/metric.jl for MJ)
+            #
             rhs[i, j, _V, e] -= MJ * ρ * gravity
         end
 
+        #
+        #Build int_{\Omega} \nabla\psi.F d\Omega
+        #
+        integrate_volume_rhs!(rhs, e, D, Nq, s_F, s_G)
+        
+        #=
         # loop of ξ-grid lines
-        for s = 1:_nstate, j = 1:Nq, i = 1:Nq, k = 1:Nq
-            rhs[i, j, s, e] += D[k, i] * s_F[k, j, s]
-        end
-        # loop of η-grid lines
-        for s = 1:_nstate, j = 1:Nq, i = 1:Nq, k = 1:Nq
-            rhs[i, j, s, e] += D[k, j] * s_G[i, k, s]
-        end
+        #for s = 1:_nstate, j = 1:Nq, i = 1:Nq, k = 1:Nq
+        #    rhs[i, j, s, e] += D[k, i] * s_F[k, j, s]
+        #end
+        ## loop of η-grid lines
+        #for s = 1:_nstate, j = 1:Nq, i = 1:Nq, k = 1:Nq
+        #    rhs[i, j, s, e] += D[k, j] * s_G[i, k, s]
+        #end
+        =#
+        
     end
 end
 
@@ -310,6 +398,10 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
     Nfp = (N+1)^(dim-1)
     nface = 2*dim
 
+    #Allocate Arrays
+    #fluxρS = fluxUS = fluxVS = fluxES = Array{DFloat}(undef, N+1, N+1)
+    fluxρS = fluxUS = fluxVS = fluxES = zero(eltype(Q))
+    
     @inbounds for e in elems
         for f = 1:nface
             for n = 1:Nfp
@@ -326,7 +418,7 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
                 EM = Q[vidM, _E, eM]
                 yM = vgeo[vidM, _y, eM]
                 PM = (R_gas/c_v)*(EM - (UM^2 + VM^2)/(2*ρM) - ρM*gravity*yM)
-
+                
                 #Right variables
                 bc = elemtobndy[f, e]
                 ρP = UP = VP = EP = PP = zero(eltype(Q))
@@ -372,12 +464,12 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
                 fluxVP_y = ρPinv * VP * VP + PP
                 fluxEP_y = ρPinv * VP * (EP+PP)
 
-                #Compute Wave Speed
-                λM = ρMinv * abs(nxM * UM + nyM * VM) + sqrt(ρMinv * γ * PM)
-                λP = ρPinv * abs(nxM * UP + nyM * VP) + sqrt(ρPinv * γ * PP)
-                λ  =  max(λM, λP)
 
-                #Compute Numerical Flux
+                # build surface fluxes 
+                #Compute Wave Speed
+                λ = compute_wave_speed(ρMinv, ρPinv, nxM, nyM, UM, VM, UP, VP, PM, PP, γ)
+                
+                #=Compute Numerical Flux
                 fluxρS = (nxM * (fluxρM_x + fluxρP_x) + nyM * (fluxρM_y + fluxρP_y) +
                           - λ * (ρP - ρM)) / 2
                 fluxUS = (nxM * (fluxUM_x + fluxUP_x) + nyM * (fluxUM_y + fluxUP_y) +
@@ -385,9 +477,13 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
                 fluxVS = (nxM * (fluxVM_x + fluxVP_x) + nyM * (fluxVM_y + fluxVP_y) +
                           - λ * (VP - VM)) / 2
                 fluxES = (nxM * (fluxEM_x + fluxEP_x) + nyM * (fluxEM_y + fluxEP_y) +
-                          - λ * (EP - EM)) / 2
-
-
+                - λ * (EP - EM)) / 2
+                =#
+                fluxρS = build_surface_fluxes_ije( nxM, nyM, fluxρM_x, fluxρP_x, fluxρM_y, fluxρP_y, λ, ρM, ρP)
+                fluxUS = build_surface_fluxes_ije( nxM, nyM, fluxUM_x, fluxUP_x, fluxUM_y, fluxUP_y, λ, UM, UP)
+                fluxVS = build_surface_fluxes_ije( nxM, nyM, fluxVM_x, fluxVP_x, fluxVM_y, fluxVP_y, λ, VM, VP)
+                fluxES = build_surface_fluxes_ije( nxM, nyM, fluxEM_x, fluxEP_x, fluxEM_y, fluxEP_y, λ, EM, EP)
+                
                 #Update RHS
                 rhs[vidM, _ρ, eM] -= sMJ * fluxρS
                 rhs[vidM, _U, eM] -= sMJ * fluxUS
@@ -820,10 +916,12 @@ end
 # }}}
 
 # {{{ Update solution (for all dimensions)
-function updatesolution!(::Val{dim}, ::Val{N}, rhs::Array,  rhs_gradQ, Q, vgeo, elems, rka, rkb, dt) where {dim, N}
+function updatesolution!(::Val{dim}, ::Val{N}, rhs::Array,  rhs_gradQ, Q, Q1, Q2, vgeo, elems, rka, rkb, dt) where {dim, N}
 
     @inbounds for e = elems, s = 1:_nstate, i = 1:(N+1)^dim
         rhs[i, s, e] += rhs_gradQ[i,s,1,e]
+        Q2[i, s, e] = Q1[i, s, e]
+        Q1[i, s, e] = Q[i, s, e]
         Q[i, s, e] += rkb * dt * rhs[i, s, e] * vgeo[i, _MJI, e]
         rhs[i, s, e] *= rka
     end
@@ -832,12 +930,16 @@ end
 # }}}
 
 # {{{ Store residual for sgs
-function store_residual_sgs!(::Val{dim}, ::Val{N}, rhs_sgs::Array,  rhs, vgeo, elems) where {dim, N}
+function store_residual_sgs!(::Val{dim}, ::Val{N}, rhs_sgs::Array,   rhs, Q, Q1, Q2, vgeo, elems, dt) where {dim, N}
 
     fill!( rhs_sgs, zero(rhs_sgs[1]))
 
     @inbounds for e = elems, s = 1:_nstate, i = 1:(N+1)^dim
-        rhs_sgs[i, s, e] += rhs[i,s,e] * vgeo[i, _MJI, e]
+        rhs_sgs[i, s, e] += rhs[i, s, e] * vgeo[i, _MJI, e]
+
+        #@show( rhs[i, s, e] + 0.5*(3*Q[i, s, e] - 4*Q1[i, s, e] + Q2[i, s, e])/dt )
+        
+        #rhs_sgs[i, s, e] += (rhs[i, s, e] + 0.5*(3*Q[i, s, e] - 4*Q1[i, s, e] + Q2[i, s, e])/dt )* vgeo[i, _MJI, e]
     end
 
 end
@@ -863,7 +965,7 @@ function compute_viscosity_sgs(::Val{dim}, ::Val{N},  visc_sgs, rhs_sgs, Q, vgeo
     ΔQ_global = zeros(DFloat, nstate)
     rhs_max = zeros(DFloat, nstate)
     mpirank = MPI.Comm_rank(mpicomm)
-    eps=1e-0
+    eps     = 1.0e-8
 
     #Compute Q_mean_global
     @inbounds for e = 1:nelem, s=1:nstate, i = 1:Np
@@ -879,7 +981,7 @@ function compute_viscosity_sgs(::Val{dim}, ::Val{N},  visc_sgs, rhs_sgs, Q, vgeo
         ΔQ_global[s]=max( ΔQ_global[s], abs( Q[i, s, e] - Q_mean_global[s] ) )
     end
     ΔQ_global=MPI.allreduce(ΔQ_global, MPI.MAX, mpicomm)
-
+    
     #Loop through elements
     @inbounds for e = 1:nelem
 
@@ -921,31 +1023,43 @@ function compute_viscosity_sgs(::Val{dim}, ::Val{N},  visc_sgs, rhs_sgs, Q, vgeo
 
         if ( ΔQ_global[_U] < 1e-5 || ΔQ_global[_V] < 1e-5 || ΔQ_global[_E] < 1e-5 )
             μ1=C1*ds^2*ΔQ_global[_ρ]*rhs_max[_ρ]/(ΔQ_global[_ρ]+eps)
-#            μ1=C1*ds^2*ρ_max*rhs_max[_ρ]/(ΔQ_global[_ρ]+eps)
+#            μ1=C1*ds*ds*ρ_max*rhs_max[_ρ]/(ΔQ_global[_ρ]+eps)
         else
-#            μ1=C1*ds^2*ρ_max*max( rhs_max[_ρ]/(ΔQ_global[_ρ]+eps), rhs_max[_U]/(ΔQ_global[_U]+eps),
-#                                  rhs_max[_V]/(ΔQ_global[_V]+eps), rhs_max[_E]/(ΔQ_global[_E]+eps) )
             μ1=C1*ds^2*ΔQ_global[_ρ]*max( rhs_max[_ρ]/(ΔQ_global[_ρ]+eps), rhs_max[_U]/(ΔQ_global[_U]+eps),
-                                          rhs_max[_V]/(ΔQ_global[_V]+eps), rhs_max[_E]/(ΔQ_global[_E]+eps) )
-        end
-#        μ1=C1*ds^2*ρ_max*rhs_max[_ρ]/(ΔQ_global[_ρ]+eps)
+                                          rhs_max[_V]/(ΔQ_global[_V]+eps), rhs_max[_E]/(ΔQ_global[_E]+eps))
+       end
 
         #Compute μmax
-        μmax=C2*ds*ρ_max*c_max
+        μmax = C2*ds*ρ_max*c_max
 
         #Compute μ, κ, ν
-        μ_elem=min(μ1, μmax)
+#        μ_elem = max(0.0, min(μ1, μmax))
+        μ_elem = μmax
+        
+#        @show(ds, C1, C2, ρ_max, c_max, μmax, μ1, μ_elem)
 
+        
         #Store viscosities
-        visc_sgs[1,e]=μ_elem #μ
-        visc_sgs[2,e]=Pr/(γ-1)*μ_elem #κ
-        visc_sgs[3,e]=Pr/ρ_max*μ_elem #ν
+        visc_sgs[1,e] = μ_elem #μ
+        visc_sgs[2,e] = Pr*μ_elem/(γ-1) #κ
+        visc_sgs[3,e] = Pr*μ_elem/ρ_max #ν
+        #@show(ds, C1, C2, ρ_max, c_max, visc_sgs[1,e], visc_sgs[2,e], visc_sgs[3,e])
 
         #=
+        if(rhs_max[_U]/(ΔQ_global[_U]+eps) > 50 || rhs_max[_U]/(ΔQ_global[_V]+eps) > 50)
+           #        @show(rhs_max[_ρ], ΔQ_global[_ρ], μ1)
+           #        @show(ΔQ_global[_U])
+           #        @show(ΔQ_global[_V])
+            @show(rhs_max[_E], ΔQ_global[_E], rhs_max[_E]/(ΔQ_global[_E]+eps))
+            @show(rhs_max[_U], ΔQ_global[_U], rhs_max[_U]/(ΔQ_global[_U]+eps))
+            @show(rhs_max[_V], ΔQ_global[_V], rhs_max[_V]/(ΔQ_global[_V]+eps))
+         end
+        =#
+        
         visc_sgs[1,e]=visc #μ
         visc_sgs[2,e]=visc #μ
         visc_sgs[3,e]=0 #μ
-        =#
+        
 
     end
 end
@@ -1378,7 +1492,7 @@ end
         if k == 1
             s_D[i, j] = D[i, j]
         end
-
+<
         # Load values will need into registers
         MJ = vgeo[i, j, _MJ, e]
         ξx, ξy = vgeo[i, j, _ξx, e], vgeo[i, j, _ξy, e]
@@ -1925,6 +2039,7 @@ function lowstorageRK(::Val{dim}, ::Val{N}, mesh, vgeo, sgeo, Q, rhs, D,
 
     #Create Device Arrays
     d_QL, d_rhsL = ArrType(Q), ArrType(rhs)
+    d_QL1, d_QL2 = ArrType(Q), ArrType(rhs)
     d_vgeoL, d_sgeo = ArrType(vgeo), ArrType(sgeo)
     d_vmapM, d_vmapP = ArrType(vmapM), ArrType(vmapP)
     d_sendelems, d_elemtobndy = ArrType(mesh.sendelems), ArrType(mesh.elemtobndy)
@@ -1965,8 +2080,11 @@ function lowstorageRK(::Val{dim}, ::Val{N}, mesh, vgeo, sgeo, Q, rhs, D,
             if (visc > 0)
 
                 # Store gridpoint residual
-                store_residual_sgs!(Val(dim), Val(N), d_rhs_sgs, d_rhsL, d_vgeoL, mesh.realelems)
+                #store_residual_sgs!(Val(dim), Val(N), d_rhs_sgs, d_rhsL, d_QL, d_QL1, d_QL2, d_vgeoL, mesh.realelems, dt)
 
+                #Smagorinsky would go here
+                #.......
+                
                 # Compute viscosity coefficient for SGS model
                 compute_viscosity_sgs(Val(dim), Val(N), d_visc_sgs, d_rhs_sgs, d_QL, d_vgeoL, visc, mpicomm)
 
@@ -1996,9 +2114,9 @@ function lowstorageRK(::Val{dim}, ::Val{N}, mesh, vgeo, sgeo, Q, rhs, D,
 
             #---------------Update Solution--------------------------#
             # update solution and scale RHS
-            updatesolution!(Val(dim), Val(N), d_rhsL, d_rhs_gradQL, d_QL, d_vgeoL, mesh.realelems,
+            updatesolution!(Val(dim), Val(N), d_rhsL, d_rhs_gradQL, d_QL, d_QL1, d_QL2, d_vgeoL, mesh.realelems,
                             RKA[s%length(RKA)+1], RKB[s], dt)
-        end
+        end #end time steopping
 
         if step == 1
             @hascuda synchronize()
@@ -2150,7 +2268,9 @@ function nse2d_sgs(::Val{dim}, ::Val{N}, mpicomm, ic, mesh, tend, iplot, visc;
 
     # Storage for the solution, rhs, and error
     mpirank == 0 && println("[CPU] creating fields (CPU)...")
-    Q = zeros(DFloat, (N+1)^dim, _nstate, nelem)
+    Q  = zeros(DFloat, (N+1)^dim, _nstate, nelem)
+    Q1 = zeros(DFloat, (N+1)^dim, _nstate, nelem)
+    Q2 = zeros(DFloat, (N+1)^dim, _nstate, nelem)
     rhs = zeros(DFloat, (N+1)^dim, _nstate, nelem)
 
     # setup the initial condition
@@ -2279,17 +2399,17 @@ function main()
     end
 
     #Input Parameters
-    time_final = DFloat(300)
+    time_final = DFloat(700)
     iplot=100
     Ne = 10
     N  = 4
-    visc = 10.0
+    visc = 1.5
     dim = 2
     hardware="cpu"
     if mpirank == 0
         @show (N,Ne,visc,iplot,time_final,hardware,mpisize)
     end
-
+    
     #Mesh Generation
     mesh2D = brickmesh((range(DFloat(0); length=Ne+1, stop=1000),
                         range(DFloat(0); length=Ne+1, stop=1000)),
