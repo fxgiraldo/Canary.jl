@@ -70,9 +70,10 @@
 #
 #-
 # ## Commented Program
-#
+#e
 #--------------------------------Markdown Language Header-----------------------
 include(joinpath(@__DIR__,"vtk.jl"))
+include("/Users/simone/Work/CLIMA/src/Shared/MoistThermodynamics.jl")
 using MPI
 using Canary
 using Printf: @sprintf
@@ -541,6 +542,17 @@ function volume_grad!(::Val{dim}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where
             fluxV = v
             fluxE = T
 
+            #SM JAN 7
+            s_F[i, j, _ρ, 1], s_F[i, j, _ρ, 2] = build_volume_fluxes_ije(ξx, 0.0, MJ, fluxρ, 0.0),  build_volume_fluxes_ije(0.0, ξy, MJ, 0.0, fluxρ)
+            s_F[i, j, _U, 1], s_F[i, j, _U, 2] = build_volume_fluxes_ije(ξx, 0.0, MJ, fluxU, 0.0),  build_volume_fluxes_ije(0.0, ξy, MJ, 0.0, fluxU)
+            s_F[i, j, _V, 1], s_F[i, j, _V, 2] = build_volume_fluxes_ije(ξx, 0.0, MJ, fluxV, 0.0),  build_volume_fluxes_ije(0.0, ξy, MJ, 0.0, fluxV)
+            s_F[i, j, _E, 1], s_F[i, j, _E, 2] = build_volume_fluxes_ije(ξx, 0.0, MJ, fluxE, 0.0),  build_volume_fluxes_ije(0.0, ξy, MJ, 0.0, fluxE)
+
+            s_G[i, j, _ρ, 1], s_G[i, j, _ρ, 2] = build_volume_fluxes_ije(ηx, 0.0, MJ, fluxρ, 0.0),  build_volume_fluxes_ije(0.0, ηy, MJ, 0.0, fluxρ)
+            s_G[i, j, _U, 1], s_G[i, j, _U, 2] = build_volume_fluxes_ije(ηx, 0.0, MJ, fluxU, 0.0),  build_volume_fluxes_ije(0.0, ηy, MJ, 0.0, fluxU)
+            s_G[i, j, _V, 1], s_G[i, j, _V, 2] = build_volume_fluxes_ije(ηx, 0.0, MJ, fluxV, 0.0),  build_volume_fluxes_ije(0.0, ηy, MJ, 0.0, fluxV)
+            s_G[i, j, _E, 1], s_G[i, j, _E, 2] = build_volume_fluxes_ije(ηx, 0.0, MJ, fluxE, 0.0),  build_volume_fluxes_ije(0.0, ηy, MJ, 0.0, fluxE)
+            #=
             s_F[i, j, _ρ, 1], s_F[i, j, _ρ, 2] = MJ * (ξx * fluxρ), MJ * (ξy * fluxρ)
             s_F[i, j, _U, 1], s_F[i, j, _U, 2] = MJ * (ξx * fluxU), MJ * (ξy * fluxU)
             s_F[i, j, _V, 1], s_F[i, j, _V, 2] = MJ * (ξx * fluxV), MJ * (ξy * fluxV)
@@ -550,6 +562,7 @@ function volume_grad!(::Val{dim}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where
             s_G[i, j, _U, 1], s_G[i, j, _U, 2] = MJ * (ηx * fluxU), MJ * (ηy * fluxU)
             s_G[i, j, _V, 1], s_G[i, j, _V, 2] = MJ * (ηx * fluxV), MJ * (ηy * fluxV)
             s_G[i, j, _E, 1], s_G[i, j, _E, 2] = MJ * (ηx * fluxE), MJ * (ηy * fluxE)
+            =#
         end
 
         # loop of ξ-grid lines
@@ -721,6 +734,7 @@ function volume_div!(::Val{dim}, ::Val{N}, rhs::Array, gradQ, Q, visc_sgs, vgeo,
             fluxE_x = μ*(u*(2*ux + lambda*div_u) + v*(uy + vx)) + κ*c_p/Pr*Tx
             fluxE_y = μ*(u*(vx + uy) + v*(2*vy + lambda*div_u)) + κ*c_p/Pr*Ty
 
+            #= SM Jan 7
             s_F[i, j, _ρ] = MJ * (ξx * fluxρ_x + ξy * fluxρ_y)
             s_F[i, j, _U] = MJ * (ξx * fluxU_x + ξy * fluxU_y)
             s_F[i, j, _V] = MJ * (ξx * fluxV_x + ξy * fluxV_y)
@@ -730,6 +744,17 @@ function volume_div!(::Val{dim}, ::Val{N}, rhs::Array, gradQ, Q, visc_sgs, vgeo,
             s_G[i, j, _U] = MJ * (ηx * fluxU_x + ηy * fluxU_y)
             s_G[i, j, _V] = MJ * (ηx * fluxV_x + ηy * fluxV_y)
             s_G[i, j, _E] = MJ * (ηx * fluxE_x + ηy * fluxE_y)
+            =#
+            s_F[i, j, _ρ] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxρ_x, fluxρ_y)
+            s_F[i, j, _U] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxU_x, fluxU_y)
+            s_F[i, j, _V] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxV_x, fluxV_y)
+            s_F[i, j, _E] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxE_x, fluxE_y)
+            
+            s_G[i, j, _ρ] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxρ_x, fluxρ_y)
+            s_G[i, j, _U] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxU_x, fluxU_y)
+            s_G[i, j, _V] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxV_x, fluxV_y)
+            s_G[i, j, _E] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxE_x, fluxE_y)
+            
         end
 
         # loop of ξ-grid lines
