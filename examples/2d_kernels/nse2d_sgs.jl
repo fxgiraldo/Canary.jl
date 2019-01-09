@@ -70,10 +70,25 @@
 #
 #-
 # ## Commented Program
-#e
+#
+#
+#
+# Steps to load MoistThermodynamics.jl
+# cd /PATH/TO/CLIMATE/src/
+#
+# Julia > import Pkg
+# Pkg > dev PlanetParameters/
+# Pkg > dev Parameters/
+# Pkg > dev Shared/
+#
+# cd /PATH/TO/myCanary.jl/Canary.jl/
+#
+#
 #--------------------------------Markdown Language Header-----------------------
 include(joinpath(@__DIR__,"vtk.jl"))
+
 include("/Users/simone/Work/CLIMA/src/Shared/MoistThermodynamics.jl")
+
 using MPI
 using Canary
 using Printf: @sprintf
@@ -103,9 +118,18 @@ end
 
 # {{{ constants
 # note the order of the fields below is also assumed in the code.
-const _nstate = 4
-const _U, _V, _ρ, _E = 1:_nstate
-const stateid = (U = _U, V = _V, ρ = _ρ, E = _E)
+const DRY_CASE = true
+if DRY_CASE
+    const _nstate = 4
+    
+    const _U, _V, _ρ, _E = 1:_nstate
+    const stateid = (U = _U, V = _V, ρ = _ρ, E = _E)
+else
+    const _nstate = 5
+    
+    const _U, _V, _ρ, _E, _q_t = 1:_nstate
+    const stateid = (U = _U, V = _V, ρ = _ρ, E = _E, qt = _q_t)
+end
 
 const _nvgeo = 8
 const _ξx, _ηx, _ξy, _ηy, _MJ, _MJI,
@@ -141,7 +165,7 @@ function courantnumber(::Val{dim}, ::Val{N}, vgeo, Q, mpicomm) where {dim, N}
     c_p::DFloat     = _c_p
     c_v::DFloat     = _c_v
     gravity::DFloat = _gravity
-
+   
     Np = (N+1)^dim
     (~, ~, nelem) = size(Q)
 
@@ -162,7 +186,7 @@ function courantnumber(::Val{dim}, ::Val{N}, vgeo, Q, mpicomm) where {dim, N}
         dt[1] = min(dt[1], loc_dt)
     end
     dt_min=MPI.Allreduce(dt[1], MPI.MIN, mpicomm)
-
+    
     #Compute Courant
     @inbounds for e = 1:nelem, n = 1:Np
         ρ, U, V, E = Q[n, _ρ, e], Q[n, _U, e], Q[n, _V, e], Q[n, _E, e]
@@ -239,9 +263,7 @@ function compute_wave_speed(ρMinv, ρPinv, nxM, nyM, UM, VM, UP, VP, PM, PP, γ
     
     return λ
     
-end        
-                
-                
+end
 
 # {{{ CPU Kernels
 # build volume fluxes (RENAME IT ?)
@@ -273,7 +295,6 @@ function build_surface_fluxes_ije( nxM, nyM,
     return fluxQS
 
 end
-
 
 # {{{ CPU Kernels
 # Build int_{\Omega} \nabla\psi.F d\Omega
@@ -398,10 +419,6 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
     Np = (N+1)^dim
     Nfp = (N+1)^(dim-1)
     nface = 2*dim
-
-    #Allocate Arrays
-    #fluxρS = fluxUS = fluxVS = fluxES = Array{DFloat}(undef, N+1, N+1)
-    fluxρS = fluxUS = fluxVS = fluxES = zero(eltype(Q))
     
     @inbounds for e in elems
         for f = 1:nface
@@ -2061,10 +2078,10 @@ function lowstorageRK(::Val{dim}, ::Val{N}, mesh, vgeo, sgeo, Q, rhs, D,
     nsendelem = length(mesh.sendelems)
     nrecvelem = length(mesh.ghostelems)
     nelem = length(mesh.elems)
-
+    
     #Create Device Arrays
     d_QL, d_rhsL = ArrType(Q), ArrType(rhs)
-    d_QL1, d_QL2 = ArrType(Q), ArrType(rhs)
+    d_QL1, d_QL2 = ArrType(Q), ArrType(Q)
     d_vgeoL, d_sgeo = ArrType(vgeo), ArrType(sgeo)
     d_vmapM, d_vmapP = ArrType(vmapM), ArrType(vmapP)
     d_sendelems, d_elemtobndy = ArrType(mesh.sendelems), ArrType(mesh.elemtobndy)
@@ -2301,12 +2318,17 @@ function nse2d_sgs(::Val{dim}, ::Val{N}, mpicomm, ic, mesh, tend, iplot, visc;
     # setup the initial condition
     mpirank == 0 && println("[CPU] computing initial conditions (CPU)...")
     @inbounds for e = 1:nelem, i = 1:(N+1)^dim
-        x, y = vgeo[i, _x, e], vgeo[i, _y, e]
-        ρ, U, V, E = ic(x, y)
-        Q[i, _ρ, e] = ρ
-        Q[i, _U, e] = U
-        Q[i, _V, e] = V
-        Q[i, _E, e] = E
+        x, y        = vgeo[i, _x, e], vgeo[i, _y, e]
+        Qinit = ic(x, y)
+        
+        Q[i, _U, e] = Qinit[1]
+        Q[i, _V, e] = Qinit[2]
+        Q[i, _ρ, e] = Qinit[3]
+        Q[i, _E, e] = Qinit[4]
+        @inbounds for istate = 5:_nstate
+            Q[i, istate, e] = Qinit[istate]
+        end
+        
     end
 
     # Convert to proper variables
@@ -2380,7 +2402,7 @@ end
 # {{{ main
 function main()
     DFloat = Float64
-
+    
     # MPI.Init()
     MPI.Initialized() || MPI.Init()
     MPI.finalize_atexit()
@@ -2393,6 +2415,10 @@ function main()
     @hascuda device!(mpirank % length(devices()))
 
     #Initial Conditions
+    #
+    # Chose a problem icase:
+    #
+    icase = 1
     function ic(dim, x...)
         # FIXME: Type generic?
         DFloat = eltype(x)
@@ -2403,24 +2429,81 @@ function main()
         c_v::DFloat     = _c_v
         gravity::DFloat = _gravity
 
-        u0 = 0
-        r = sqrt((x[1]-500)^2 + (x[dim]-350)^2 )
-        rc = 250.0
-        θ_ref=300.0
-        θ_c=0.5
-        Δθ=0.0
-        if r <= rc
-            Δθ = 0.5 * θ_c * (1.0 + cos(π * r/rc))
+        Qinit = Array{DFloat}(undef, _nstate)
+
+        icase = 1
+        if(icase == 1)
+            u0 = 0.0
+            r = sqrt((x[1]-500)^2 + (x[dim]-350)^2 )
+            rc = 250.0
+            θ_ref=300.0
+            θ_c=0.5
+            Δθ=0.0
+            if r <= rc
+                Δθ = 0.5 * θ_c * (1.0 + cos(π * r/rc))
+            end
+            θ_k=θ_ref + Δθ
+            π_k=1.0 - gravity/(c_p*θ_k)*x[dim]
+            c=c_v/R_gas
+            ρ_k=p0/(R_gas*θ_k)*(π_k)^c
+            ρ = ρ_k
+            U = u0
+            V = 0.0
+            E = θ_k
+        
+            Qinit[1] = U
+            Qinit[2] = V
+            Qinit[3] = ρ
+            Qinit[4] = E
+            
+            #ρ, U, V, E
+        
+            return Qinit
+            
+        elseif(icase == 11)
+            u0     = 0.0
+            r      = sqrt((x[1]-500)^2 + (x[dim]-350)^2 )
+            rc     = 250.0
+
+            #Thermal
+            θ_ref  = 300.0
+            θ_c    =   0.5
+            Δθ     =   0.0
+
+            #Passive
+            qt_ref =   0.0
+            qt_c   =   1.0
+            Δqt    =   0.0
+            if r <= rc
+                Δθ  = 0.5 * θ_c  * (1.0 + cos(π * r/rc))
+                Δqt = 0.5 * qt_c * (1.0 + cos(π * r/rc))
+            end
+            
+            θ_k  = θ_ref + Δθ
+            qt_k = θ_ref + Δθ
+            π_k  = 1.0 - gravity/(c_p*θ_k)*x[dim]
+            c    = c_v/R_gas
+            ρ_k  = p0/(R_gas*θ_k)*(π_k)^c
+            
+            ρ    = ρ_k
+            U    = u0
+            V    = 0.0
+            E    = θ_k
+            qt   = qt_k
+            #ρ, U, V, E, qt
+
+            Qinit[1] = U
+            Qinit[2] = V
+            Qinit[3] = ρ
+            Qinit[4] = E
+            Qinit[5] = qt_k
+            
+            return Qinit
+            
+        else
+            error(" \'ic\': Undefined case for IC. Assign a value to icase in \'main\' ")
+            
         end
-        θ_k=θ_ref + Δθ
-        π_k=1.0 - gravity/(c_p*θ_k)*x[dim]
-        c=c_v/R_gas
-        ρ_k=p0/(R_gas*θ_k)*(π_k)^c
-        ρ = ρ_k
-        U = u0
-        V = 0.0
-        E = θ_k
-        ρ, U, V, E
     end
 
     #Input Parameters
@@ -2439,7 +2522,7 @@ function main()
     mesh2D = brickmesh((range(DFloat(0); length=Ne+1, stop=1000),
                         range(DFloat(0); length=Ne+1, stop=1000)),
                        (true, false),
-                       part=mpirank+1, numparts=mpisize)
+                       part = mpirank+1, numparts = mpisize)
 
     #Call Solver
     if hardware == "cpu"
