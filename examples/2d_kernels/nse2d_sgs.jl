@@ -86,7 +86,6 @@
 #
 #--------------------------------Markdown Language Header-----------------------
 include(joinpath(@__DIR__,"vtk.jl"))
-
 include("/Users/simone/Work/CLIMA/src/Shared/MoistThermodynamics.jl")
 
 using MPI
@@ -116,19 +115,49 @@ end
 end
 # }}}
 
+const _nsd      = 2 #number of space dimensions
+
 # {{{ constants
 # note the order of the fields below is also assumed in the code.
-const DRY_CASE = true
+#
+#
+# FIND A WAY TO CLEAR PREVIPOUSLY COMPILED CONSTS
+#
+#
+# DEFINE CASE AND PRE_COMPILED QUANTITIES:
+#
+
+_icase = 1001
+if(_icase < 1000)
+    DRY_CASE = true
+else
+    DRY_CASE = false
+end
+
 if DRY_CASE
-    const _nstate = 4
-    
+
+    const _nstate   = 4
+    const _ntracers = _nstate - (_nsd + 2)
     const _U, _V, _ρ, _E = 1:_nstate
     const stateid = (U = _U, V = _V, ρ = _ρ, E = _E)
-else
-    const _nstate = 5
     
-    const _U, _V, _ρ, _E, _q_t = 1:_nstate
-    const stateid = (U = _U, V = _V, ρ = _ρ, E = _E, qt = _q_t)
+else
+    
+    if (_icase == 1001)
+        #
+        # RTB + passive tracer
+        #
+        const _nstate = 5
+        const _ntracers = _nstate - (_nsd + 2)
+        const _U, _V, _ρ, _E, _qt = 1:_nstate
+        const stateid = (U = _U, V = _V, ρ = _ρ, E = _E, qt = _qt)
+        
+    elseif (_icase == 1002)
+        #
+        # Moist dynamics
+        #
+        error(" _icase 1002 for Moist dynamics not coded yet")
+    end
 end
 
 const _nvgeo = 8
@@ -334,6 +363,11 @@ function volume_rhs!(::Val{2}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where N
     #Allocate Arrays
     s_F = Array{DFloat}(undef, Nq, Nq, _nstate)
     s_G = Array{DFloat}(undef, Nq, Nq, _nstate)
+
+    #Allocate and initialize to zero tracer flux quantities
+    QT       = zeros(DFloat, _ntracers)
+    fluxQT_x = zeros(DFloat, _ntracers)
+    fluxQT_y = zeros(DFloat, _ntracers)
     
     @inbounds for e in elems
         for j = 1:Nq, i = 1:Nq
@@ -341,21 +375,35 @@ function volume_rhs!(::Val{2}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where N
             ξx, ξy = vgeo[i,j,_ξx,e], vgeo[i,j,_ξy,e]
             ηx, ηy = vgeo[i,j,_ηx,e], vgeo[i,j,_ηy,e]
             y = vgeo[i,j,_y,e]
-
+            
             U, V = Q[i, j, _U, e], Q[i, j, _V, e]
             ρ, E = Q[i, j, _ρ, e], Q[i, j, _E, e]
             P = (R_gas/c_v)*(E - (U^2 + V^2)/(2*ρ) - ρ*gravity*y)
 
+            #Tracers
+            @inbounds for itracer = 1:_ntracers
+                QT[itracer] = Q[i, j, _qt, e]
+            end
+            
             ρinv = 1 / ρ
             fluxρ_x = U
             fluxU_x = ρinv * U * U + P
             fluxV_x = ρinv * V * U
             fluxE_x = ρinv * U * (E+P)
+            #Tracers
+            @inbounds for itracer = 1:_ntracers
+                fluxQT_x[itracer] = U
+            end
 
             fluxρ_y = V
             fluxU_y = ρinv * U * V
             fluxV_y = ρinv * V * V + P
             fluxE_y = ρinv * V * (E+P)
+            #Tracers
+            @inbounds for itracer = 1:_ntracers
+                fluxQT_y[itracer] = V
+            end
+            
 
             #
             # Build volume fluxes
@@ -369,16 +417,22 @@ function volume_rhs!(::Val{2}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where N
             s_G[i, j, _V] = MJ * (ηx * fluxV_x + ηy * fluxV_y)
             s_G[i, j, _E] = MJ * (ηx * fluxE_x + ηy * fluxE_y)
             =#
-            s_F[i,j,_ρ] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxρ_x, fluxρ_y)
-            s_F[i,j,_U] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxU_x, fluxU_y)
-            s_F[i,j,_V] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxV_x, fluxV_y)
-            s_F[i,j,_E] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxE_x, fluxE_y)
+            s_F[i,j,_ρ]  = build_volume_fluxes_ije(ξx, ξy, MJ, fluxρ_x, fluxρ_y)
+            s_F[i,j,_U]  = build_volume_fluxes_ije(ξx, ξy, MJ, fluxU_x, fluxU_y)
+            s_F[i,j,_V]  = build_volume_fluxes_ije(ξx, ξy, MJ, fluxV_x, fluxV_y)
+            s_F[i,j,_E]  = build_volume_fluxes_ije(ξx, ξy, MJ, fluxE_x, fluxE_y)
             
-            s_G[i,j,_ρ] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxρ_x, fluxρ_y)
-            s_G[i,j,_U] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxU_x, fluxU_y)
-            s_G[i,j,_V] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxV_x, fluxV_y)
-            s_G[i,j,_E] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxE_x, fluxE_y)
+            s_G[i,j,_ρ]  = build_volume_fluxes_ije(ηx, ηy, MJ, fluxρ_x, fluxρ_y)
+            s_G[i,j,_U]  = build_volume_fluxes_ije(ηx, ηy, MJ, fluxU_x, fluxU_y)
+            s_G[i,j,_V]  = build_volume_fluxes_ije(ηx, ηy, MJ, fluxV_x, fluxV_y)
+            s_G[i,j,_E]  = build_volume_fluxes_ije(ηx, ηy, MJ, fluxE_x, fluxE_y)
             
+            #Tracers
+            @inbounds for itracer = 1:_ntracers
+                istate = itracer + (_nsd+2) 
+                s_F[i,j,istate] = build_volume_fluxes_ije(ξx, ξy, MJ, fluxQT_x[itracer], fluxQT_y[itracer])
+                s_G[i,j,istate] = build_volume_fluxes_ije(ηx, ηy, MJ, fluxQT_x[itracer], fluxQT_y[itracer])
+            end
             
             #
             # buoyancy term: (refer to src/metric.jl for MJ)
@@ -390,17 +444,6 @@ function volume_rhs!(::Val{2}, ::Val{N}, rhs::Array, Q, vgeo, D, elems) where N
         #Build int_{\Omega} \nabla\psi.F d\Omega
         #
         integrate_volume_rhs!(rhs, e, D, Nq, s_F, s_G)
-        
-        #=
-        # loop of ξ-grid lines
-        #for s = 1:_nstate, j = 1:Nq, i = 1:Nq, k = 1:Nq
-        #    rhs[i, j, s, e] += D[k, i] * s_F[k, j, s]
-        #end
-        ## loop of η-grid lines
-        #for s = 1:_nstate, j = 1:Nq, i = 1:Nq, k = 1:Nq
-        #    rhs[i, j, s, e] += D[k, j] * s_G[i, k, s]
-        #end
-        =#
         
     end
 end
@@ -419,6 +462,10 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
     Np = (N+1)^dim
     Nfp = (N+1)^(dim-1)
     nface = 2*dim
+
+    #Allocate and initialize to zero tracer flux quantities
+    QTM = zeros(DFloat, _ntracers)
+    QTP = zeros(DFloat, _ntracers)
     
     @inbounds for e in elems
         for f = 1:nface
@@ -436,10 +483,20 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
                 EM = Q[vidM, _E, eM]
                 yM = vgeo[vidM, _y, eM]
                 PM = (R_gas/c_v)*(EM - (UM^2 + VM^2)/(2*ρM) - ρM*gravity*yM)
+
+                #Tracers
+                @inbounds for itracer = 1:_ntracers
+                    istate = itracer + (_nsd+2)
+                    QTM[itracer] = Q[vidM, istate, eM]
+                end
                 
                 #Right variables
                 bc = elemtobndy[f, e]
                 ρP = UP = VP = EP = PP = zero(eltype(Q))
+                @inbounds for itracer = 1:_ntracers
+                    istate = itracer + (_nsd+2)
+                    QTP[itracer] = zero(eltype(Q))
+                end
                 if bc == 0
                     ρP = Q[vidP, _ρ, eP]
                     UP = Q[vidP, _U, eP]
@@ -460,15 +517,17 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
 
                 #Left fluxes
                 ρMinv = 1 / ρM
-                fluxρM_x = UM
-                fluxUM_x = ρMinv * UM * UM + PM
-                fluxVM_x = ρMinv * VM * UM
-                fluxEM_x = ρMinv * UM * (EM+PM)
+                fluxρM_x  = UM
+                fluxUM_x  = ρMinv * UM * UM + PM
+                fluxVM_x  = ρMinv * VM * UM
+                fluxEM_x  = ρMinv * UM * (EM+PM)
+                #fluxQTM_x = UM
 
-                fluxρM_y = VM
-                fluxUM_y = ρMinv * UM * VM
-                fluxVM_y = ρMinv * VM * VM + PM
-                fluxEM_y = ρMinv * VM * (EM+PM)
+                fluxρM_y  = VM
+                fluxUM_y  = ρMinv * UM * VM
+                fluxVM_y  = ρMinv * VM * VM + PM
+                fluxEM_y  = ρMinv * VM * (EM+PM)
+                #fluxQTM_y = VM
 
                 #Right fluxes
                 ρPinv = 1 / ρP
@@ -476,11 +535,13 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
                 fluxUP_x = ρPinv * UP * UP + PP
                 fluxVP_x = ρPinv * VP * UP
                 fluxEP_x = ρPinv * UP * (EP+PP)
+                #fluxQTP_x = UP
 
                 fluxρP_y = VP
                 fluxUP_y = ρPinv * UP * VP
                 fluxVP_y = ρPinv * VP * VP + PP
                 fluxEP_y = ρPinv * VP * (EP+PP)
+                #fluxQTP_y = VP
 
 
                 # build surface fluxes 
@@ -501,8 +562,12 @@ function flux_rhs!(::Val{dim}, ::Val{N}, rhs::Array, Q, sgeo, vgeo, elems, vmapM
                 fluxUS = build_surface_fluxes_ije( nxM, nyM, fluxUM_x, fluxUP_x, fluxUM_y, fluxUP_y, λ, UM, UP)
                 fluxVS = build_surface_fluxes_ije( nxM, nyM, fluxVM_x, fluxVP_x, fluxVM_y, fluxVP_y, λ, VM, VP)
                 fluxES = build_surface_fluxes_ije( nxM, nyM, fluxEM_x, fluxEP_x, fluxEM_y, fluxEP_y, λ, EM, EP)
+                #@inbounds for istate = (_nsd+2)+1:_nstate
+                #    itracer = istate - (_nsd+2)
+                #    fluxQTS = build_surface_fluxes_ije( nxM, nyM, fluxQTM_x, fluxQTP_x, fluxQTM_y, fluxQTP_y, λ, QTM, QTP)
+                #end
                 
-                #Update RHS
+                #Update RHS LOOP HERE
                 rhs[vidM, _ρ, eM] -= sMJ * fluxρS
                 rhs[vidM, _U, eM] -= sMJ * fluxUS
                 rhs[vidM, _V, eM] -= sMJ * fluxVS
@@ -674,7 +739,7 @@ function flux_grad!(::Val{dim}, ::Val{N}, rhs::Array,  Q, sgeo, vgeo, elems, vma
                 fluxUS = 0.5*(fluxUM + fluxUP)
                 fluxVS = 0.5*(fluxVM + fluxVP)
                 fluxES = 0.5*(fluxEM + fluxEP)
-
+<
                 #Update RHS
                 rhs[vidM, _ρ, 1, eM] += sMJ * nxM*fluxρS
                 rhs[vidM, _ρ, 2, eM] += sMJ * nyM*fluxρS
@@ -2030,7 +2095,7 @@ function lowstorageRK(::Val{dim}, ::Val{N}, mesh, vgeo, sgeo, Q, rhs, D,
     gravity::DFloat = _gravity
 
     mpirank = MPI.Comm_rank(mpicomm)
-
+    @show(_nstate, _ntracers, size(Q))
     # Fourth-order, low-storage, Runge–Kutta scheme of Carpenter and Kennedy
     # (1994) ((5,4) 2N-Storage RK scheme.
     #
@@ -2098,6 +2163,10 @@ function lowstorageRK(::Val{dim}, ::Val{N}, mesh, vgeo, sgeo, Q, rhs, D,
     d_visc_sgs = zeros(DFloat, 3, nelem)
     visc_sgsL = zeros(DFloat, (N+1)^dim, 3, nelem)
 
+    #Declare Qtracers for output:
+    Qtracers = zeros(DFloat, (N+1), (N+1), _ntracers, nelem)
+    
+    
     #Start Time Loop
     start_time = t1 = time_ns()
     for step = 1:nsteps
@@ -2184,13 +2253,19 @@ function lowstorageRK(::Val{dim}, ::Val{N}, mesh, vgeo, sgeo, Q, rhs, D,
             V = reshape((@view Q[:, _V, :]), ntuple(j->(N+1),dim)..., nelem)
             E = reshape((@view Q[:, _E, :]), ntuple(j->(N+1),dim)..., nelem)
             E = E .- 300.0
+            @inbounds for istate = (_nsd+2)+1:_nstate
+                itracer = istate - (_nsd+2)
+                Qtracers[:,:,itracer,:] = reshape((@view Q[:, istate, :]), ntuple(j->(N+1),dim)..., nelem)
+            end
+            
             MU1 = reshape((@view visc_sgsL[:, 1, :]), ntuple(j->(N+1),dim)..., nelem)
             MU2 = reshape((@view visc_sgsL[:, 2, :]), ntuple(j->(N+1),dim)..., nelem)
             MU3 = reshape((@view visc_sgsL[:, 3, :]), ntuple(j->(N+1),dim)..., nelem)
             writemesh(@sprintf("viz/nse2d_sgs_%s_rank_%04d_step_%05d",
                                ArrType, mpirank, step), X...;
-                      fields=(("ρ", ρ), ("U", U), ("V", V), ("E", E), ("mu1", MU1), ("mu2", MU2), ("mu3", MU3)),
+                      fields=(("ρ", ρ), ("U", U), ("V", V), ("E", E), ("QT", Qtracers[:,:,1,:])),
                       realelems=mesh.realelems)
+            
         end
     end
 if (mpirank == 0)
@@ -2217,10 +2292,11 @@ function convert_set2nc_to_set2c(::Val{dim}, ::Val{N}, vgeo, Q) where {dim, N}
 
     println("[CPU] converting variables (CPU)...")
     @inbounds for e = 1:nelem, n = 1:Np
-        ρ, u, v, E = Q[n, _ρ, e], Q[n, _U, e], Q[n, _V, e], Q[n, _E, e]
-        Q[n, _U, e] = ρ*u
-        Q[n, _V, e] = ρ*v
-        Q[n, _E, e] = ρ*E
+        ρ, u, v, E   = Q[n, _ρ, e], Q[n, _U, e], Q[n, _V, e], Q[n, _E, e]
+        Q[n, _U, e]  = ρ*u
+        Q[n, _V, e]  = ρ*v
+        Q[n, _E, e]  = ρ*E
+        Q[n, _qt, e] = ρ*qt
     end
 end
 # }}}
@@ -2307,14 +2383,17 @@ function nse2d_sgs(::Val{dim}, ::Val{N}, mpicomm, ic, mesh, tend, iplot, visc;
     mpirank == 0 && println("[CPU] computing metrics...")
     (vgeo, sgeo) = computegeometry(Val(dim), mesh, D, ξ, ω, meshwarp, vmapM)
     (nface, nelem) = size(mesh.elemtoelem)
-
+    
     # Storage for the solution, rhs, and error
     mpirank == 0 && println("[CPU] creating fields (CPU)...")
-    Q  = zeros(DFloat, (N+1)^dim, _nstate, nelem)
-    Q1 = zeros(DFloat, (N+1)^dim, _nstate, nelem)
-    Q2 = zeros(DFloat, (N+1)^dim, _nstate, nelem)
-    rhs = zeros(DFloat, (N+1)^dim, _nstate, nelem)
-
+    Q        = zeros(DFloat, (N+1)^dim, _nstate, nelem)
+    Q1       = zeros(DFloat, (N+1)^dim, _nstate, nelem)
+    Q2       = zeros(DFloat, (N+1)^dim, _nstate, nelem)
+    rhs      = zeros(DFloat, (N+1)^dim, _nstate, nelem)
+    
+    #Declare Qtracers for output:
+    Qtracers = zeros(DFloat, (N+1), (N+1), _ntracers, nelem)
+    
     # setup the initial condition
     mpirank == 0 && println("[CPU] computing initial conditions (CPU)...")
     @inbounds for e = 1:nelem, i = 1:(N+1)^dim
@@ -2330,7 +2409,7 @@ function nse2d_sgs(::Val{dim}, ::Val{N}, mpicomm, ic, mesh, tend, iplot, visc;
         end
         
     end
-
+    
     # Convert to proper variables
     mpirank == 0 && println("[CPU] converting variables (CPU)...")
     convert_set2nc_to_set3c(Val(dim), Val(N), vgeo, Q)
@@ -2351,7 +2430,7 @@ function nse2d_sgs(::Val{dim}, ::Val{N}, mpicomm, ic, mesh, tend, iplot, visc;
     Q_temp=copy(Q)
     convert_set3c_to_set2nc(Val(dim), Val(N), vgeo, Q_temp)
     stats[1] = L2energysquared(Val(dim), Val(N), Q_temp, vgeo, mesh.realelems)
-
+    
     # plot the initial condition
     mkpath("viz")
     X = ntuple(j->reshape((@view vgeo[:, _x+j-1, :]), ntuple(j->N+1,dim)...,
@@ -2361,9 +2440,14 @@ function nse2d_sgs(::Val{dim}, ::Val{N}, mpicomm, ic, mesh, tend, iplot, visc;
     V = reshape((@view Q_temp[:, _V, :]), ntuple(j->(N+1),dim)..., nelem)
     E = reshape((@view Q_temp[:, _E, :]), ntuple(j->(N+1),dim)..., nelem)
     E = E .- 300.0
+    @inbounds for istate = (_nsd+2)+1:_nstate
+        itracer = istate - (_nsd+2)
+        Qtracers[:,:,itracer,:] = reshape((@view Q_temp[:, istate, :]), ntuple(j->(N+1),dim)..., nelem)
+    end
+    
     writemesh(@sprintf("viz/nse2d_sgs_%s_rank_%04d_step_%05d",
                        ArrType, mpirank, 0), X...;
-              fields=(("ρ", ρ), ("U", U), ("V", V), ("E", E)),
+              fields=(("ρ", ρ), ("U", U), ("V", V), ("E", E), ("QT",  Qtracers[:,:,1,:])),
               realelems=mesh.realelems)
 
     mpirank == 0 && println("[DEV] starting time stepper...")
@@ -2375,14 +2459,19 @@ function nse2d_sgs(::Val{dim}, ::Val{N}, mpicomm, ic, mesh, tend, iplot, visc;
     convert_set3c_to_set2nc(Val(dim), Val(N), vgeo, Q_temp)
     X = ntuple(j->reshape((@view vgeo[:, _x+j-1, :]), ntuple(j->N+1,dim)...,
                           nelem), dim)
-    ρ = reshape((@view Q_temp[:, _ρ, :]), ntuple(j->(N+1),dim)..., nelem)
-    U = reshape((@view Q_temp[:, _U, :]), ntuple(j->(N+1),dim)..., nelem)
-    V = reshape((@view Q_temp[:, _V, :]), ntuple(j->(N+1),dim)..., nelem)
-    E = reshape((@view Q_temp[:, _E, :]), ntuple(j->(N+1),dim)..., nelem)
-    E = E .- 300.0
+    ρ        = reshape((@view Q_temp[:, _ρ, :]), ntuple(j->(N+1),dim)..., nelem)
+    U        = reshape((@view Q_temp[:, _U, :]), ntuple(j->(N+1),dim)..., nelem)
+    V        = reshape((@view Q_temp[:, _V, :]), ntuple(j->(N+1),dim)..., nelem)
+    E        = reshape((@view Q_temp[:, _E, :]), ntuple(j->(N+1),dim)..., nelem)
+    E        = E .- 300.0
+    @inbounds for istate = (_nsd+2)+1:_nstate
+        itracer = istate - (_nsd+2)
+        Qtracers[:,:,itracer,:] = reshape((@view Q_temp[:, istate, :]), ntuple(j->(N+1),dim)..., nelem)
+    end
+    #Last step:
     writemesh(@sprintf("viz/nse2d_sgs_%s_rank_%04d_step_%05d",
                        ArrType, mpirank, nsteps), X...;
-              fields=(("ρ", ρ), ("U", U), ("V", V), ("E", E)),
+              fields=(("ρ", ρ), ("U", U), ("V", V), ("E", E), ("QT",  Qtracers[:,:,1,:])),
               realelems=mesh.realelems)
 
     mpirank == 0 && println("[CPU] computing final energy...")
@@ -2418,10 +2507,9 @@ function main()
     #
     # Chose a problem icase:
     #
-    icase = 1
     function ic(dim, x...)
         # FIXME: Type generic?
-        DFloat = eltype(x)
+        DFloat          = eltype(x)
         γ::DFloat       = _γ
         p0::DFloat      = _p0
         R_gas::DFloat   = _R_gas
@@ -2431,7 +2519,7 @@ function main()
 
         Qinit = Array{DFloat}(undef, _nstate)
 
-        icase = 1
+        icase = _icase #defined on top of this file
         if(icase == 1)
             u0 = 0.0
             r = sqrt((x[1]-500)^2 + (x[dim]-350)^2 )
@@ -2460,7 +2548,7 @@ function main()
         
             return Qinit
             
-        elseif(icase == 11)
+        elseif(icase == 1001)
             u0     = 0.0
             r      = sqrt((x[1]-500)^2 + (x[dim]-350)^2 )
             rc     = 250.0
@@ -2507,7 +2595,7 @@ function main()
     end
 
     #Input Parameters
-    time_final = DFloat(700)
+    time_final = DFloat(100)
     iplot=100
     Ne = 10
     N  = 4
@@ -2515,7 +2603,7 @@ function main()
     dim = 2
     hardware="cpu"
     if mpirank == 0
-        @show (N,Ne,visc,iplot,time_final,hardware,mpisize)
+        @show (dim,N,Ne,visc,iplot,time_final,hardware,mpisize)
     end
     
     #Mesh Generation
@@ -2527,13 +2615,13 @@ function main()
     #Call Solver
     if hardware == "cpu"
         mpirank == 0 && println("Running 2d (CPU)...")
-        nse2d_sgs(Val(2), Val(N), mpicomm, (x...)->ic(dim, x...), mesh2D, time_final, iplot, visc;
+        nse2d_sgs(Val(dim), Val(N), mpicomm, (x...)->ic(dim, x...), mesh2D, time_final, iplot, visc;
               ArrType=Array, tout = 10)
         mpirank == 0 && println()
     elseif hardware == "gpu"
         @hascuda begin
             mpirank == 0 && println("Running 2d (GPU)...")
-            nse2d_sgs(Val(2), Val(N), mpicomm, (x...)->ic(dim, x...), mesh2D, time_final, iplot, visc;
+            nse2d_sgs(Val(dim), Val(N), mpicomm, (x...)->ic(dim, x...), mesh2D, time_final, iplot, visc;
                   ArrType=CuArray, tout = 10)
             mpirank == 0 && println()
         end
