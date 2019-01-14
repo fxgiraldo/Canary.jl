@@ -128,7 +128,7 @@ const _nsd = 2 #number of space dimensions
 #
 
 ###_icase = 1    #RTB
-_icase = 1001 #RTB + Passive tracer
+_icase = 1003 #RTB + Passive tracer
 if(_icase < 1000)
     DRY_CASE = true
 else
@@ -137,7 +137,7 @@ end
 
 if DRY_CASE
 
-    const _nstate   = 4
+    const _nstate   = _nsd + 2
     const _ntracers = 0
     const _U, _V, _ρ, _E = 1:_nstate
     const stateid = (U = _U, V = _V, ρ = _ρ, E = _E)
@@ -148,21 +148,27 @@ else
         #
         # RTB + passive tracer
         #
-        const _nstate = 5
-        const _ntracers = _nstate - (_nsd + 2)
+        const _ntracers = 1
+        const _nstate = (_nsd + 2) + _ntracers
         const _U, _V, _ρ, _E, _qt = 1:_nstate
         const stateid = (U = _U, V = _V, ρ = _ρ, E = _E, qt = _qt)
 
     elseif (_icase == 1002)
         #
-        # RTB + 2 passive tracers
+        # Moist dynamics
         #
-        const _nstate = 5
-        const _ntracers = _nstate - (_nsd + 2)
-        const _U, _V, _ρ, _E, _qt = 1:_nstate
-        const stateid = (U = _U, V = _V, ρ = _ρ, E = _E, qt = _qt)
+        error(" _icase 1002 not coded yet")
         
-    elseif (_icase > 1002)
+    elseif (_icase == 1003)
+        #
+        # RTB + 3 passive tracers
+        #
+        const _ntracers = 3
+        const _nstate = (_nsd + 2) + _ntracers
+        const _U, _V, _ρ, _E, _qt1, _qt2, _qt3 = 1:_nstate
+        const stateid = (U = _U, V = _V, ρ = _ρ, E = _E, qt1 = _qt1, qt2 = _qt2, qt3 = _qt3)
+        
+    elseif (_icase > 1003)
         #
         # Moist dynamics
         #
@@ -2765,7 +2771,7 @@ function main()
             
             return Qinit
 
-        elseif(icase == 1002)
+        elseif(icase == 1003)
             #
             # RTB + 2 passive tracers
             #
@@ -2780,34 +2786,56 @@ function main()
             Δθ     =   0.0
             
             #Passive
-            rtracer  = sqrt((x[1]-500)^2 + (x[dim]-350)^2 )
-            rctracer = 250.0
-            qt_ref   =   0.0
-            qt_c     =   1.0
-            Δqt      =   0.0
+            rt1  = sqrt((x[1]-500)^2 + (x[dim]-350)^2 )
+            rct1 = 250.0
+            
+            rt2  = sqrt((x[1]-200)^2 + (x[dim]-500)^2 )
+            rct2 = 100.0
+            
+            rt3  = sqrt((x[1]-300)^2 + (x[dim]-400)^2 )
+            rct3 = 150.0
+            
+            qt_ref  =   0.0
+            qt_c    =   1.0
+            
+            Δqt1    =   0.0
+            Δqt2    =   0.0
+            Δqt3    =   0.0
             
             if r <= rc
                 Δθ  = 0.5 * θ_c  * (1.0 + cos(π * r/rc))
-                Δqt = 0.5 #* qt_c * (1.0 + cos(π * rtracer/rctracer))
+            end
+            if rt1 <= rct1
+                Δqt1 = 0.5 * qt_c * (1.0 + cos(π * rt1/rct1))
+            end
+            if rt2 <= rct2
+                Δqt2 = 0.5 * qt_c * (1.0 + cos(π * rt2/rct2))
+            end
+            if rt3 <= rct3
+                Δqt3 = 0.5 * qt_c * (1.0 + cos(π * rt3/rct3))
             end
             
             θ_k  = θ_ref + Δθ
             π_k  = 1.0 - gravity/(c_p*θ_k)*x[dim]
             c    = c_v/R_gas
             ρ_k  = p0/(R_gas*θ_k)*(π_k)^c
-            qt_k = qt_ref + Δqt
-            
+
             ρ    = ρ_k
             U    = u0
             V    = 0.0
             E    = θ_k
-            qt   = qt_k
+            
+            qt1 = qt_ref + Δqt1
+            qt2 = qt_ref + Δqt2
+            qt3 = qt_ref + Δqt3
             
             Qinit[1] = U
             Qinit[2] = V
             Qinit[3] = ρ
             Qinit[4] = E
-            Qinit[5] = qt
+            Qinit[5] = qt1
+            Qinit[6] = qt2
+            Qinit[7] = qt3
             
             return Qinit
             
